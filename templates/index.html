@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#14213d">
+<title>India Market Brief</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700;800&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = { theme: { extend: { fontFamily: { head: ['"Bricolage Grotesque"', 'sans-serif'], body: ['"Instrument Sans"', 'system-ui', 'sans-serif'] } } } };
+</script>
+<style>
+  :root { --bg:#14213d; --panel:#1d2d50; --line:#2e4170; --ink:#f1f4fb; --mute:#9db0d6;
+          --bull:#34d399; --bear:#f87171; --neu:#facc15; }
+  html, body { height:100%; }
+  body { background:var(--bg); color:var(--ink); font-family:'Instrument Sans',system-ui,sans-serif;
+         padding-top:env(safe-area-inset-top); padding-bottom:env(safe-area-inset-bottom); }
+  .head { font-family:'Bricolage Grotesque',sans-serif; }
+  .track { scroll-snap-type:x mandatory; -webkit-overflow-scrolling:touch; scrollbar-width:none; }
+  .track::-webkit-scrollbar { display:none; }
+  .slide { scroll-snap-align:center; scroll-snap-stop:always; }
+  .ring-fg { transition:stroke-dashoffset .9s ease, stroke .3s; }
+  button:focus-visible, select:focus-visible, a:focus-visible { outline:2px solid var(--neu); outline-offset:2px; }
+  @media (prefers-reduced-motion: reduce) { .ring-fg { transition:none; } }
+</style>
+</head>
+<body class="font-body">
+<div class="max-w-md mx-auto h-full flex flex-col px-4 pt-3 pb-3">
+
+  <header class="flex items-center justify-between gap-3">
+    <div>
+      <h1 class="head text-xl font-extrabold leading-tight">India Market Brief</h1>
+      <p id="updated" class="text-xs" style="color:var(--mute)">Loading headlines…</p>
+    </div>
+    <div class="flex items-center gap-2">
+      <label for="count" class="sr-only">Slides</label>
+      <select id="count" class="rounded-lg text-sm px-2 py-2 border" style="background:var(--panel);border-color:var(--line)">
+        <option>5</option><option selected>10</option><option>15</option><option>20</option><option>25</option><option>30</option>
+      </select>
+      <button id="refresh" class="rounded-lg px-3 py-2 text-sm border" style="background:var(--panel);border-color:var(--line)" aria-label="Refresh headlines">Refresh</button>
+    </div>
+  </header>
+
+  <section class="grid grid-cols-3 gap-2 mt-4" aria-label="Market gauges">
+    <div class="rounded-2xl p-2 text-center" style="background:var(--panel)">
+      <div class="relative mx-auto w-20 h-20" id="g-economy"></div>
+      <p class="text-xs mt-1 font-semibold">Indian Economy</p>
+    </div>
+    <div class="rounded-2xl p-2 text-center" style="background:var(--panel)">
+      <div class="relative mx-auto w-20 h-20" id="g-market"></div>
+      <p class="text-xs mt-1 font-semibold">Nifty / Sensex</p>
+    </div>
+    <div class="rounded-2xl p-2 text-center" style="background:var(--panel)">
+      <div class="relative mx-auto w-20 h-20" id="g-global"></div>
+      <p class="text-xs mt-1 font-semibold">Global Spillover</p>
+    </div>
+  </section>
+  <p class="text-[11px] mt-1 text-center" style="color:var(--mute)">Rings show probability of a bullish outcome</p>
+
+  <nav class="flex gap-2 mt-3" role="tablist">
+    <button id="tab-live" role="tab" class="flex-1 rounded-lg py-2 text-sm font-semibold">Live</button>
+    <button id="tab-saved" role="tab" class="flex-1 rounded-lg py-2 text-sm font-semibold">Saved Slides (<span id="saved-n">0</span>)</button>
+  </nav>
+
+  <main class="flex-1 min-h-0 mt-3 flex flex-col">
+    <div id="track" class="track flex-1 min-h-0 flex overflow-x-auto"></div>
+    <p id="pos" class="text-center text-xs mt-2" style="color:var(--mute)"></p>
+  </main>
+</div>
+
+<script>
+const LS_SAVED = 'fi_saved_v1', LS_COUNT = 'fi_count_v1';
+const COLORS = { bullish:'#34d399', bearish:'#f87171', neutral:'#facc15' };
+const LABELS = { bullish:'Bullish', bearish:'Bearish', neutral:'Neutral' };
+const $ = id => document.getElementById(id);
+let live = [], tab = 'live';
+
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const safeUrl = u => /^https?:\/\//i.test(u) ? u : '#';
+
+function loadSaved() { try { return JSON.parse(localStorage.getItem(LS_SAVED)) || []; } catch { return []; } }
+function storeSaved(a) { try { localStorage.setItem(LS_SAVED, JSON.stringify(a)); } catch {} }
+const isSaved = id => loadSaved().some(s => s.id === id);
+
+function toggleSave(id) {
+  const saved = loadSaved();
+  const i = saved.findIndex(s => s.id === id);
+  if (i >= 0) saved.splice(i, 1);
+  else { const s = live.find(x => x.id === id); if (s) saved.unshift(s); }
+  storeSaved(saved);
+  render(false);
+}
+
+function ring(el, g) {
+  const C = 2 * Math.PI * 34, col = COLORS[g.label];
+  el.innerHTML = `
+    <svg viewBox="0 0 80 80" class="w-full h-full -rotate-90" role="img" aria-label="${g.prob}% ${LABELS[g.label]}">
+      <circle cx="40" cy="40" r="34" fill="none" stroke="#2e4170" stroke-width="7"/>
+      <circle class="ring-fg" cx="40" cy="40" r="34" fill="none" stroke="${col}" stroke-width="7" stroke-linecap="round"
+        stroke-dasharray="${C}" stroke-dashoffset="${C}"/>
+    </svg>
+    <div class="absolute inset-0 flex flex-col items-center justify-center">
+      <span class="head text-lg font-extrabold leading-none">${g.prob}%</span>
+      <span class="text-[10px] font-semibold" style="color:${col}">${LABELS[g.label]}</span>
+    </div>`;
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    el.querySelector('.ring-fg').style.strokeDashoffset = C * (1 - g.prob / 100);
+  }));
+}
+
+function ago(iso) {
+  const m = Math.max(0, Math.round((Date.now() - new Date(iso)) / 60000));
+  if (m < 60) return m + 'm ago';
+  const h = Math.round(m / 60);
+  return h < 24 ? h + 'h ago' : Math.round(h / 24) + 'd ago';
+}
+
+function card(s, n, total) {
+  const col = COLORS[s.sentiment], saved = isSaved(s.id);
+  return `
+  <article class="slide shrink-0 w-full h-full px-1">
+    <div class="h-full rounded-3xl p-5 flex flex-col border" style="background:var(--panel);border-color:var(--line)">
+      <div class="flex items-center justify-between text-xs" style="color:var(--mute)">
+        <span>${esc(s.source)} · ${ago(s.published)}</span>
+        <button data-save="${esc(s.id)}" class="p-2 -m-2" aria-label="${saved ? 'Remove bookmark' : 'Save slide'}" aria-pressed="${saved}">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="${saved ? '#facc15' : 'none'}" stroke="${saved ? '#facc15' : '#9db0d6'}" stroke-width="2" stroke-linejoin="round"><path d="M6 3h12v18l-6-4-6 4z"/></svg>
+        </button>
+      </div>
+      <h2 class="head text-2xl font-bold leading-snug mt-4 overflow-y-auto">
+        <a href="${safeUrl(s.link)}" target="_blank" rel="noopener noreferrer">${esc(s.headline)}</a>
+      </h2>
+      <p class="mt-4 text-[15px] leading-relaxed" style="color:#d6e0f5">${esc(s.impact_line)}</p>
+      <div class="mt-auto pt-5">
+        <div class="flex items-end justify-between">
+          <span class="inline-flex items-center gap-2 rounded-full px-3 py-1 text-sm font-semibold" style="background:${col}22;color:${col}">
+            <span class="w-2 h-2 rounded-full" style="background:${col}"></span>${LABELS[s.sentiment]}
+          </span>
+          <span class="head text-3xl font-extrabold" style="color:${col}">${s.prob}%</span>
+        </div>
+        <div class="h-1.5 rounded-full mt-3" style="background:#2e4170"><div class="h-full rounded-full" style="width:${s.prob}%;background:${col}"></div></div>
+        <p class="text-[11px] mt-1" style="color:var(--mute)">Probability of bullish outcome for India</p>
+      </div>
+    </div>
+  </article>`;
+}
+
+function render(resetScroll = true) {
+  const list = tab === 'live' ? live : loadSaved();
+  $('saved-n').textContent = loadSaved().length;
+  ['live', 'saved'].forEach(t => {
+    const b = $('tab-' + t), on = t === tab;
+    b.style.background = on ? '#f1f4fb' : 'var(--panel)';
+    b.style.color = on ? '#14213d' : '#f1f4fb';
+    b.setAttribute('aria-selected', on);
+  });
+  const track = $('track'), x = track.scrollLeft;
+  track.innerHTML = list.length
+    ? list.map((s, i) => card(s, i + 1, list.length)).join('')
+    : `<div class="w-full flex items-center justify-center text-center px-8 text-sm" style="color:var(--mute)">${
+        tab === 'saved' ? 'No saved slides yet. Tap the bookmark on any slide to keep it here.' : 'No headlines to show.'}</div>`;
+  track.scrollLeft = resetScroll ? 0 : x;
+  updatePos();
+}
+
+function updatePos() {
+  const track = $('track'), n = track.querySelectorAll('article').length;
+  if (!n) { $('pos').textContent = ''; return; }
+  const i = Math.min(n, Math.round(track.scrollLeft / track.clientWidth) + 1);
+  $('pos').textContent = `${i} / ${n} · swipe`;
+}
+
+async function load() {
+  const n = $('count').value;
+  $('updated').textContent = 'Fetching live headlines…';
+  try {
+    const r = await fetch('/api/news?count=' + n);
+    if (!r.ok) throw new Error((await r.json()).error || 'Request failed');
+    const d = await r.json();
+    live = d.slides;
+    ring($('g-economy'), d.gauges.economy);
+    ring($('g-market'), d.gauges.market);
+    ring($('g-global'), d.gauges.global);
+    $('updated').textContent = `Updated ${new Date(d.updated).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · ${d.sources_ok.length}/3 sources`;
+  } catch (e) {
+    $('updated').textContent = 'Could not load headlines. Tap Refresh.';
+  }
+  render();
+}
+
+$('track').addEventListener('scroll', updatePos, { passive: true });
+$('track').addEventListener('click', e => {
+  const b = e.target.closest('[data-save]');
+  if (b) toggleSave(b.dataset.save);
+});
+$('tab-live').onclick = () => { tab = 'live'; render(); };
+$('tab-saved').onclick = () => { tab = 'saved'; render(); };
+$('refresh').onclick = load;
+$('count').onchange = () => { try { localStorage.setItem(LS_COUNT, $('count').value); } catch {} load(); };
+
+try { const c = localStorage.getItem(LS_COUNT); if (c) $('count').value = c; } catch {}
+load();
+setInterval(load, 300000);
+</script>
+</body>
+</html>
