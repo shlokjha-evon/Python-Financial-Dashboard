@@ -1,7 +1,7 @@
 services:
   - type: web
     name: python-financial-dashboard
-    runtime: python
+    runtime: static
     region: singapore
     plan: free
     branch: main
